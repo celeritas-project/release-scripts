@@ -141,6 +141,17 @@ class ReleaseMetadata:
     merge_bases: list = field(default_factory=list)
     target_branch: str = "upstream/develop"
 
+    @classmethod
+    def from_comprehensive_version(cls, major, patch):
+        "This includes all authors since the previous release split off"
+        release = f"0.{major}.{patch}"
+        merge_bases = [f"v0.{major}.0-dev"]
+
+        return cls(
+            release=release, merge_bases=merge_bases, target_branch="v" + release
+        )
+
+
 
 class PullRequestRange:
     """Handle a range of pull requests for a release."""
@@ -437,6 +448,13 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     # Check if an artifact is already attached
     if assets := release["assets"]:
         print("Accessing existing release tarball")
+        assets = [a for a in gh_release['assets'] if a['name'].endswith('.tar.gz')]
+        if not assets:
+            print("No tarball found in release assets")
+            return None
+        elif len(assets) > 1:
+            print("Multiple tarballs found in release assets")
+            return None
         return (
             assets[0]["browser_download_url"],
             ghapi_cache.download_file(assets[0]["url"]),
