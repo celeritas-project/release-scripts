@@ -117,7 +117,7 @@ class GhApiCache:
             org = self.owner
         return self._cached_request("team", self.api.teams.list, org)
 
-    def download_file(self, url: str, content_type: str = "application/octet-stream", ext: Optional[str] = None) -> Path:
+    def download_file(self, url: str, content_type: Optional[str] = None, ext: Optional[str] = None) -> Path:
         """
         Downloads a file from the given URL and caches it by content hash in the
         ghapicache-downloads directory. Maps URL to content hash in the cache.
@@ -140,7 +140,10 @@ class GhApiCache:
 
         # File not in cache or cache entry invalid, download it
         print(f"Downloading {url}")
-        r = requests.get(url, headers={"Accept": content_type})
+        headers = {}
+        if content_type is not None:
+            headers["Accept"] = content_type
+        r = requests.get(url, headers=headers)
         r.raise_for_status()
         self.cache_file_to_url(r.content, url, ext)
         return r.content

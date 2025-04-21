@@ -9,8 +9,9 @@ Helper functions for release note generation and other GitHub processing.
 import re
 import subprocess
 
-from os import environ
 from pathlib import Path
+from contextlib import contextmanager
+
 
 MISSING_PR_ID = {
     "Fix linking to CUDA toolkit when using VecGeom": 989,
@@ -21,18 +22,18 @@ RE_SUBJECT_PR_SQUASH = re.compile(r"\(#([\d]+)\)$")
 RE_SUBJECT_PR_MERGE = re.compile(r"^Merge pull request #([\d]+)")
 
 
-def git(*args, split=b'\n'):
+def git(*args, split=b"\n"):
     result = subprocess.run(
         (GIT,) + args,
         capture_output=True,
         check=True,
-        env={'GIT_DIR': str(CELERITAS_REPO / ".git")}
+        env={"GIT_DIR": str(CELERITAS_REPO / ".git")},
     )
     return [s.decode() for s in result.stdout.split(split)]
 
 
 def gitz(subcommand, *args):
-    return git(subcommand, '-z', *args, split=b'\0')
+    return git(subcommand, "-z", *args, split=b"\0")
 
 
 def git_log_subjects(start, stop, first_parent=True):
@@ -47,7 +48,7 @@ def git_log_subjects(start, stop, first_parent=True):
 
 
 def git_merge_base(a, b):
-    return git('merge-base', a, b)[0]
+    return git("merge-base", a, b)[0]
 
 
 def subject_to_pr(subj):
@@ -62,11 +63,11 @@ def subject_to_pr(subj):
 
 
 def git_renames(old_ref: str, new_ref: str):
-    names = iter(gitz('diff', '--name-status', old_ref, new_ref))
+    names = iter(gitz("diff", "--name-status", old_ref, new_ref))
     try:
         while True:
             delta = next(names)
-            if delta.startswith('R'):
+            if delta.startswith("R"):
                 yield (next(names), next(names))
             else:
                 skipped = next(names)
@@ -76,4 +77,23 @@ def git_renames(old_ref: str, new_ref: str):
 
 
 def git_lstree(ref: str):
-    return gitz('ls-tree', '-r', '--name-only', ref)
+    return gitz("ls-tree", "-r", "--name-only", ref)
+
+@contextmanager
+def open_pbcopy():
+    """Write to the clipboard as though to a text file.
+    """
+    process = subprocess.Popen(
+        ["pbcopy"], 
+        stdin=subprocess.PIPE, 
+        env={"LANG": "en_US.UTF-8"},
+        encoding="utf-8",
+    )
+    try:
+        writer = process.stdin
+        yield writer
+    finally:
+        writer.close()
+        process.wait()
+
+

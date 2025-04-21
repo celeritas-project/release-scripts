@@ -307,6 +307,10 @@ class ReleaseNotes:
         ff = self.format_fill
         fp.writelines(line.format(**ff) + "\n" for line in self.notes)
 
+    def __str__(self):
+        with io.StringIO() as output:
+            self.write(output)
+            return output.getvalue()
 
 class MarkdownNotes(ReleaseNotes):
     """Generate release notes in Markdown format.
@@ -439,7 +443,7 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
         )
     else:
         print("Downloading release tarball")
-        tarball_url = release["tarball_url"]
+        tarball_url = release["tarball_url"]        
         tarball_content = ghapi_cache.download_file(tarball_url)
 
         # Upload the tarball as an artifact
@@ -450,11 +454,11 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
             name=f"release-{release['tag_name']}{suffix}"
         )
         content_type = "application/gzip"
-        r = requests.post(
-            upload_url, headers={"Content-Type": content_type}, data=tarball_content
+    
+        uploaded = ghapi_cache.api(
+            upload_url, verb="post",
+            headers={"Content-Type": content_type}, data=tarball_content,
         )
-        r.raise_for_status()
-        uploaded = r.json()
         browser_url = uploaded["browser_download_url"]
         print(f"Uploaded artifact: {browser_url}")
         ghapi_cache.cache_file_to_url(tarball_content, browser_url, ext=suffix)
