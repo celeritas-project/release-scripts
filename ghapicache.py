@@ -129,6 +129,7 @@ class GhApiCache:
         Returns:
             Path to the cached file
         """
+        assert url is not None
         # Check if URL is already in our files cache
         if filename := self.cache["files"].get(url):
             file_path = self.downloads_dir / filename

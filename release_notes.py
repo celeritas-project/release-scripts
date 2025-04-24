@@ -139,7 +139,7 @@ class ReleaseMetadata:
 
     release: Optional[str] = None
     merge_bases: list = field(default_factory=list)
-    target_branch: str = "upstream/develop"
+    target_branch: str = "develop"
 
     @classmethod
     def from_comprehensive_version(cls, major, patch):
@@ -432,7 +432,6 @@ def create_release(github_api, metadata: ReleaseMetadata, notes):
     print(f"Draft release {metadata.release} created: {release['html_url']}")
     return release
 
-
 def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     """
     Manage the release artifact:
@@ -445,42 +444,44 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     Returns:
         Tuple of (browser_download_url, artifact_content)
     """
-    # Check if an artifact is already attached
-    if assets := release["assets"]:
-        print("Accessing existing release tarball")
-        assets = [a for a in gh_release['assets'] if a['name'].endswith('.tar.gz')]
-        if not assets:
-            print("No tarball found in release assets")
-            return None
-        elif len(assets) > 1:
-            print("Multiple tarballs found in release assets")
-            return None
+    assets = release["assets"] or []
+    assets = [a for a in assets if a['name'].endswith('.tar.gz')]
+    if len(assets) == 1:
         return (
             assets[0]["browser_download_url"],
             ghapi_cache.download_file(assets[0]["url"]),
         )
-    else:
-        print("Downloading release tarball")
-        tarball_url = release["tarball_url"]        
-        tarball_content = ghapi_cache.download_file(tarball_url)
-
-        # Upload the tarball as an artifact
-        print("Uploading release tarball")
-        upload_url_template = URITemplate(release["upload_url"])
-        suffix = ".tar.gz"
-        upload_url = upload_url_template.expand(
-            name=f"release-{release['tag_name']}{suffix}"
-        )
-        content_type = "application/gzip"
+    elif len(assets) > 1:
+        print("Multiple tarballs found in release assets")
+        return None
     
-        uploaded = ghapi_cache.api(
-            upload_url, verb="post",
-            headers={"Content-Type": content_type}, data=tarball_content,
-        )
-        browser_url = uploaded["browser_download_url"]
-        print(f"Uploaded artifact: {browser_url}")
-        ghapi_cache.cache_file_to_url(tarball_content, browser_url, ext=suffix)
-        return (browser_url, tarball_content)
+    print("No tarball found in release assets: reloading from GitHub")
+    release = ghapi_cache.api.repos.get_release(release_id=release["id"])
+    if release["assets"]:
+        # Updating found assets loaded externally or previously
+        return get_or_upload_tarball(ghapi_cache, release)
+    
+    print("Downloading release tarball")
+    tarball_url = release["tarball_url"]        
+    tarball_content = ghapi_cache.download_file(tarball_url)
+
+    # Upload the tarball as an artifact
+    print("Uploading release tarball")
+    upload_url_template = URITemplate(release["upload_url"])
+    suffix = ".tar.gz"
+    upload_url = upload_url_template.expand(
+        name=f"release-{release['tag_name']}{suffix}"
+    )
+    content_type = "application/gzip"
+
+    uploaded = ghapi_cache.api(
+        upload_url, verb="post",
+        headers={"Content-Type": content_type}, data=tarball_content,
+    )
+    browser_url = uploaded["browser_download_url"]
+    print(f"Uploaded artifact: {browser_url}")
+    ghapi_cache.cache_file_to_url(tarball_content, browser_url, ext=suffix)
+    return (browser_url, tarball_content)
 
 
 def ZenodoContribBuilder(ucache: UserCache):

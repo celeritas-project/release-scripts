@@ -17,7 +17,7 @@ MISSING_PR_ID = {
     "Fix linking to CUDA toolkit when using VecGeom": 989,
 }
 GIT = "git"
-CELERITAS_REPO = Path.home() / "Code/celeritas"
+CELERITAS_REPO = Path.home() / "Code/celeritas-temp"
 RE_SUBJECT_PR_SQUASH = re.compile(r"\(#([\d]+)\)$")
 RE_SUBJECT_PR_MERGE = re.compile(r"^Merge pull request #([\d]+)")
 
@@ -43,6 +43,8 @@ def git_log_subjects(start, stop, first_parent=True):
     args = []
     if first_parent:
         args.append("--first-parent")
+    # TODO: return (hash, subject) pairs
+    #args += [r"--format=%H\\t%s", span]
     args += [r"--format=%s", span]
     return git("log", *args)
 
