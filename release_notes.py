@@ -133,6 +133,7 @@ def list_contributors(prev_release, new_release, author_map=None):
     return sorted(author_count.items(), key=lambda kv: kv[1], reverse=True)
 
 
+
 @dataclass
 class ReleaseMetadata:
     """Metadata for a release."""
@@ -142,7 +143,7 @@ class ReleaseMetadata:
     target_branch: str = "develop"
 
     @classmethod
-    def from_comprehensive_version(cls, major, patch):
+    def from_comprehensive_version(cls, major, patch = 0):
         "This includes all authors since the previous release split off"
         release = f"0.{major}.{patch}"
         merge_bases = [f"v0.{major}.0-dev"]
@@ -151,6 +152,22 @@ class ReleaseMetadata:
             release=release, merge_bases=merge_bases, target_branch="v" + release
         )
 
+    def as_version(self):
+        """Convert release string to a version tuple."""
+        if self.release is None:
+            return None
+        return tuple(int(x) for x in self.release.split("."))
+
+    def is_major(self):
+        """Check if the release is a major version."""
+        version = self.as_version()
+        if version is None:
+            return False
+        if version[0] == 0:
+            # Strip leading zero for dev version
+            version = version[1:]
+
+        return all(x == 0 for x in version[1:])
 
 
 class PullRequestRange:
@@ -361,11 +378,17 @@ class RstNotes(ReleaseNotes):
             List of lines for the title
         """
         char = "=-^"[level]
-        return [title, char * len(title)]
+        return [title, char * len(title), ""]
 
     def __init__(self, release, body):
         """Initialize with release metadata and body text."""
         super().__init__(release)
+
+        if release.is_major():
+            (major, minor, patch) = release.as_version()
+            self.notes += self.make_title(f"Series {major}.{minor}", level=0)
+            self.paragraph(f"Major development version 0.6 can be referenced at :cite:t:`celeritas-{major}.{minor}`.")
+            
         self.notes += [
             ".. _release_v{release}:",
             "",
@@ -469,8 +492,9 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     print("Uploading release tarball")
     upload_url_template = URITemplate(release["upload_url"])
     suffix = ".tar.gz"
+    tag_name = release['tag_name'].lstrip("v")
     upload_url = upload_url_template.expand(
-        name=f"release-{release['tag_name']}{suffix}"
+        name=f"celeritas-{tag_name}{suffix}"
     )
     content_type = "application/gzip"
 
