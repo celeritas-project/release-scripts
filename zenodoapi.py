@@ -183,7 +183,7 @@ class ZenodoDeposition:
                 data={"name": name},
                 files={"file": content},
             )
-            print("Uploaded", uploaded)
+            print("Uploaded using old API")
         else:
             uploaded = self.client.request(
                 requests.put, f"{bucket_url}/{name}", data=content
@@ -239,12 +239,14 @@ class ZenodoDeposition:
             self.data = self.client.get_deposition(self.id).data
         return self
 
-    def update(self, metadata: Dict[str, Any]) -> None:
+    def update(self, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Update this deposition's metadata.
 
         Args:
             metadata: New metadata
         """
+        if metadata is None:
+            metadata = self.md
         self.data = self.client.request(
             requests.put,
             self.links["self"],

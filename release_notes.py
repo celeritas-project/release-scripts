@@ -4,15 +4,11 @@ Helper functions and classes for generating release notes and managing GitHub re
 """
 
 import io
-import re
 import json
 from datetime import datetime
 from collections import defaultdict, namedtuple
 from pathlib import Path
-from typing import Dict, Optional, List, Set, Any
-import subprocess
-import hashlib
-import requests
+from typing import Dict, Optional
 from markdown import markdown
 from ghapi.all import gh2date
 from dataclasses import dataclass, field
@@ -133,7 +129,6 @@ def list_contributors(prev_release, new_release, author_map=None):
     return sorted(author_count.items(), key=lambda kv: kv[1], reverse=True)
 
 
-
 @dataclass
 class ReleaseMetadata:
     """Metadata for a release."""
@@ -143,10 +138,17 @@ class ReleaseMetadata:
     target_branch: str = "develop"
 
     @classmethod
-    def from_comprehensive_version(cls, major, patch = 0):
+    def from_comprehensive_version(cls, major, minor=0, patch=None):
         "This includes all authors since the previous release split off"
-        release = f"0.{major}.{patch}"
-        merge_bases = [f"v0.{major}.0-dev"]
+        if patch is None:
+            # Development release
+            prev = f"0.{major}.0"
+            major, minor, patch = 0, major, minor
+        else:
+            prev = f"{major}.{minor}.0"
+
+        release = f"{major}.{minor}.{patch}"
+        merge_bases = [f"v{prev}-dev^"]
 
         return cls(
             release=release, merge_bases=merge_bases, target_branch="v" + release
@@ -296,7 +298,7 @@ class ReleaseNotes:
         self.format_fill = format_fill
         self.notes: list = []
 
-    def title(self, title: str, level=1):
+    def title(self, title: str, level=2):
         """Add a title to the notes."""
         self.notes.extend(self.make_title(title, level))
         self.notes.append("")  # Add a blank line after the title
@@ -340,6 +342,7 @@ class ReleaseNotes:
             self.write(output)
             return output.getvalue()
 
+
 class MarkdownNotes(ReleaseNotes):
     """Generate release notes in Markdown format.
 
@@ -347,7 +350,7 @@ class MarkdownNotes(ReleaseNotes):
 
     @staticmethod
     def make_title(title, level=2):
-        return ["#" * (level + 1) + " " + title]
+        return ["#" * (level) + " " + title]
 
     def __init__(self, release, body):
         super().__init__(release)
@@ -377,7 +380,7 @@ class RstNotes(ReleaseNotes):
         Returns:
             List of lines for the title
         """
-        char = "=-^"[level]
+        char = "=-^~"[level]  # (Series, version, category, UNUSED)
         return [title, char * len(title), ""]
 
     def __init__(self, release, body):
@@ -387,8 +390,10 @@ class RstNotes(ReleaseNotes):
         if release.is_major():
             (major, minor, patch) = release.as_version()
             self.notes += self.make_title(f"Series {major}.{minor}", level=0)
-            self.paragraph(f"Major development version 0.6 can be referenced at :cite:t:`celeritas-{major}.{minor}`.")
-            
+            self.paragraph(
+                f"Major development version {major}.{minor} can be referenced at :cite:t:`celeritas-{major}-{minor}`."
+            )
+
         self.notes += [
             ".. _release_v{release}:",
             "",
@@ -455,6 +460,33 @@ def create_release(github_api, metadata: ReleaseMetadata, notes):
     print(f"Draft release {metadata.release} created: {release['html_url']}")
     return release
 
+
+Tarball = namedtuple("Tarball", ["name", "url", "content"])
+
+
+def get_tarball(ghapi_cache: GhApiCache, release: dict):
+    assets = release["assets"] or []
+    assets = [a for a in assets if a["name"].endswith(".tar.gz")]
+    if len(assets) == 1:
+        url = assets[0]["browser_download_url"]
+        return Tarball(
+            assets[0]["name"],
+            url,
+            ghapi_cache.download_file(url),
+        )
+    elif len(assets) > 1:
+        print("Multiple tarballs found in release assets")
+        return None
+
+    print("No tarball found in release assets: reloading from GitHub")
+    release = ghapi_cache.api.repos.get_release(release_id=release["id"])
+    if release["assets"]:
+        # Updating found assets loaded externally or previously
+        return get_tarball(ghapi_cache, release)
+    print("Still no tarball found in release assets")
+    return None
+
+
 def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     """
     Manage the release artifact:
@@ -467,45 +499,36 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     Returns:
         Tuple of (browser_download_url, artifact_content)
     """
-    assets = release["assets"] or []
-    assets = [a for a in assets if a['name'].endswith('.tar.gz')]
-    if len(assets) == 1:
-        return (
-            assets[0]["browser_download_url"],
-            ghapi_cache.download_file(assets[0]["url"]),
-        )
-    elif len(assets) > 1:
-        print("Multiple tarballs found in release assets")
-        return None
-    
-    print("No tarball found in release assets: reloading from GitHub")
-    release = ghapi_cache.api.repos.get_release(release_id=release["id"])
-    if release["assets"]:
-        # Updating found assets loaded externally or previously
-        return get_or_upload_tarball(ghapi_cache, release)
-    
+    found = get_tarball(ghapi_cache, release)
+    if found:
+        print("Found tarball in release assets")
+        return found
+
+    # No tarball found, download the release tarball
+    # and upload it as an artifact
     print("Downloading release tarball")
-    tarball_url = release["tarball_url"]        
+    tarball_url = release["tarball_url"]
     tarball_content = ghapi_cache.download_file(tarball_url)
 
     # Upload the tarball as an artifact
     print("Uploading release tarball")
     upload_url_template = URITemplate(release["upload_url"])
     suffix = ".tar.gz"
-    tag_name = release['tag_name'].lstrip("v")
-    upload_url = upload_url_template.expand(
-        name=f"celeritas-{tag_name}{suffix}"
-    )
+    tag_name = release["tag_name"].lstrip("v")
+    name = f"{ghapi_cache.repo}-{tag_name}{suffix}"
+    upload_url = upload_url_template.expand(name=name)
     content_type = "application/gzip"
 
     uploaded = ghapi_cache.api(
-        upload_url, verb="post",
-        headers={"Content-Type": content_type}, data=tarball_content,
+        upload_url,
+        verb="post",
+        headers={"Content-Type": content_type},
+        data=tarball_content,
     )
     browser_url = uploaded["browser_download_url"]
     print(f"Uploaded artifact: {browser_url}")
     ghapi_cache.cache_file_to_url(tarball_content, browser_url, ext=suffix)
-    return (browser_url, tarball_content)
+    return Tarball(name=name, url=browser_url, content=tarball_content)
 
 
 def ZenodoContribBuilder(ucache: UserCache):
@@ -524,7 +547,12 @@ def ZenodoContribBuilder(ucache: UserCache):
 
 
 class ZenodoMetadataBuilder:
-    def __init__(self, user_cache, teams):
+    def __init__(
+        self,
+        user_cache: UserCache,
+        teams: dict,
+        ghapi_cache: Optional[GhApiCache] = None,
+    ):
         """
         Initialize the Zenodo metadata generator.
 
@@ -534,6 +562,16 @@ class ZenodoMetadataBuilder:
         """
         self.user_cache = user_cache
         self.teams = teams
+        if ghapi_cache is None:
+            repo_url = None
+            community = None
+        else:
+            (proj, repo) = (ghapi_cache.owner, ghapi_cache.repo)
+            repo_url = f"https://github.com/{proj}/{repo}"
+            community = proj
+        self.repo_url = repo_url
+        self.community = community
+
         self.make_zcontrib = ZenodoContribBuilder(user_cache)
 
     def __call__(self, contrib, release_md, gh_release=None):
@@ -570,10 +608,10 @@ class ZenodoMetadataBuilder:
             "license": "apache2.0",  # TODO: doesn't support multiple [, "mit", "cc-by-4.0"],
             "communities": [
                 # TODO: community tag seems to be ignored
-                {"identifier": "celeritas-project"}
+                {"identifier": self.community}
             ],
             "custom": {
-                "code:codeRepository": "https://github.com/celeritas-project/celeritas",
+                "code:codeRepository": self.repo_url,
                 "code:programmingLanguage": [
                     {"id": "c++", "title": {"en": "C++"}},
                     {"id": "cuda", "title": {"en": "CUDA"}},
@@ -587,4 +625,3 @@ class ZenodoMetadataBuilder:
                 gh2date(gh_release["published_at"]).date().isoformat()
             )
         return result
-

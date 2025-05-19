@@ -17,7 +17,7 @@ MISSING_PR_ID = {
     "Fix linking to CUDA toolkit when using VecGeom": 989,
 }
 GIT = "git"
-CELERITAS_REPO = Path.home() / "Code/celeritas-temp"
+REPO = Path.home() / "Code/celeritas-temp"
 RE_SUBJECT_PR_SQUASH = re.compile(r"\(#([\d]+)\)$")
 RE_SUBJECT_PR_MERGE = re.compile(r"^Merge pull request #([\d]+)")
 
@@ -27,7 +27,7 @@ def git(*args, split=b"\n"):
         (GIT,) + args,
         capture_output=True,
         check=True,
-        env={"GIT_DIR": str(CELERITAS_REPO / ".git")},
+        env={"GIT_DIR": str(REPO / ".git")},
     )
     return [s.decode() for s in result.stdout.split(split)]
 
