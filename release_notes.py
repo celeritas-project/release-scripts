@@ -499,8 +499,7 @@ def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
     Returns:
         Tuple of (browser_download_url, artifact_content)
     """
-    found = get_tarball(ghapi_cache, release)
-    if found:
+    if found := get_tarball(ghapi_cache, release):
         print("Found tarball in release assets")
         return found
 
