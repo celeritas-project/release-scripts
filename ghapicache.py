@@ -62,7 +62,7 @@ class GhApiCache:
         self.cache_file = cache_file
 
         self.api = GhApi(owner=owner, repo=repo, token=token, **kwargs)
-        self.owner: str = owner
+        self.owner: str = owner or ""
         self.repo: str = repo
 
         # Create downloads directory
@@ -80,6 +80,9 @@ class GhApiCache:
 
         atexit.register(self.flush)
 
+    def issue(self, issue_id: int) -> Any:
+        return self._cached_request("issue", self.api.issues.get, issue_id)
+    
     def pull(self, pr_id: int) -> Any:
         return self._cached_request("pull", self.api.pulls.get, pr_id)
 
@@ -179,6 +182,17 @@ class GhApiCache:
 
         return content
 
+    def purge(self):
+        """Clear the cache and delete the cache file."""
+        self.cache = {}
+        self.dirty = False
+        try:
+            self.cache_file.unlink()
+        except Exception as e:
+            print("Failed to delete cache file:", e)
+        else:
+            print("Deleted cache file:", self.cache_file)
+
     def flush(self):
         if not self.dirty:
             return
@@ -200,7 +214,7 @@ class GhApiCache:
             self.cache = {}
             print("Failed to load cache:", e)
 
-    def _make_subkey(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> str:
+    def subkey(self, *args, **kwargs) -> str:
         try:
             key_data = (args, sorted(kwargs.items()))
             return json.dumps(key_data, sort_keys=True, default=str)
@@ -210,7 +224,7 @@ class GhApiCache:
     def _cached_request(self, category: str, func: Callable, *args, **kwargs) -> Any:
         # Ensure the category exists in the cache, then use a local variable for performance.
         cat_cache = self.cache.setdefault(category, {})
-        subkey = self._make_subkey(args, kwargs)
+        subkey = self.subkey(*args, **kwargs)
         try:
             response = cat_cache[subkey]
         except KeyError:

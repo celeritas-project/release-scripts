@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 import githelpers as ghelp
 from ghapicache import GhApiCache
 from uritemplate import URITemplate
+import re
 
 # Define namedtuples for data structures
 UserInfo = namedtuple("UserInfo", ["name", "institute", "email", "orcid"])
@@ -240,6 +241,8 @@ class ContributionCounter:
             reviewer=sorted_count(self.reviewer_count),
         )
 
+def markdown_to_rst(text):
+    return re.sub(r'`([^`]+)`(\S)', r'``\1`` \2', text)
 
 class SortedPulls:
     def __init__(self, cached_api: GhApiCache):
@@ -253,7 +256,7 @@ class SortedPulls:
 
         summary = {
             "id": pr_id,
-            "title": p["title"].replace("`", "``"),
+            "title": markdown_to_rst(p['title']),
             "labels": labels,
             "author": author,
             "merged_at": gh2date(p["merged_at"]),
@@ -381,7 +384,7 @@ class RstNotes(ReleaseNotes):
             List of lines for the title
         """
         char = "=-^~"[level]  # (Series, version, category, UNUSED)
-        return [title, char * len(title), ""]
+        return [title, char * len(title)]
 
     def __init__(self, release, body):
         """Initialize with release metadata and body text."""
