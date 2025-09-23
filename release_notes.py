@@ -18,7 +18,7 @@ from uritemplate import URITemplate
 import re
 
 # Define namedtuples for data structures
-UserInfo = namedtuple("UserInfo", ["name", "institute", "email", "orcid"])
+UserInfo = namedtuple("UserInfo", ["name", "institute", "email", "orcid", "github"])
 Team = namedtuple("Team", ["description", "members"])
 Contributions = namedtuple("Contributions", ["author", "reviewer"])
 
@@ -68,6 +68,7 @@ class UserCache:
             email=u["email"],
             institute=self.institutes.get(username),
             orcid=self.orcid.get(username),
+            github=username,
         )
 
     def __getitem__(self, username: str) -> UserInfo:
