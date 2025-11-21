@@ -85,7 +85,9 @@ def get_team(cached: GhApiCache, team_md: dict):
 
 def get_last_name(user_info):
     """Extract last name from user info for sorting."""
-    return user_info.name.split(" ")[-1]
+    if name := user_info.name:
+        return name.split(" ")[-1]
+    return ""
 
 
 def format_user(user_info):
