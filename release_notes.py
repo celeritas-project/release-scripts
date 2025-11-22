@@ -7,8 +7,8 @@ import io
 import json
 from datetime import datetime
 from collections import defaultdict, namedtuple
-from pathlib import Path
-from typing import Dict, Optional
+from pathlib import Path, PurePath
+from typing import Dict, Optional, Union
 from markdown import markdown
 from ghapi.all import gh2date
 from dataclasses import dataclass, field
@@ -137,7 +137,7 @@ def list_contributors(prev_release, new_release, author_map=None):
 class ReleaseMetadata:
     """Metadata for a release."""
 
-    release: Optional[str] = None
+    release: str
     merge_bases: list = field(default_factory=list)
     target_branch: str = "develop"
 
@@ -244,8 +244,10 @@ class ContributionCounter:
             reviewer=sorted_count(self.reviewer_count),
         )
 
+
 def markdown_to_rst(text):
-    return re.sub(r'`([^`]+)`(\S)', r'``\1`` \2', text)
+    return re.sub(r"`([^`]+)`(\S)", r"``\1`` \2", text)
+
 
 class SortedPulls:
     def __init__(self, cached_api: GhApiCache):
@@ -259,7 +261,7 @@ class SortedPulls:
 
         summary = {
             "id": pr_id,
-            "title": markdown_to_rst(p['title']),
+            "title": markdown_to_rst(p["title"]),
             "labels": labels,
             "author": author,
             "merged_at": gh2date(p["merged_at"]),
@@ -442,9 +444,13 @@ def find_release(github_api, version: str):
     return None
 
 
-def create_release(github_api, metadata: ReleaseMetadata, notes):
+def create_release(
+    github_api,
+    metadata: ReleaseMetadata,
+    notes,
+):
     """
-    Create a GitHub release.
+    Create a GitHub release draft.
 
     Args:
         metadata: ReleaseMetadata instance
@@ -452,7 +458,7 @@ def create_release(github_api, metadata: ReleaseMetadata, notes):
         github_api: GitHub API instance
 
     Returns:
-        Created release object
+        Created release JSON object
     """
     # Create the release using the GitHub API
     release = github_api.repos.create_release(
@@ -460,7 +466,7 @@ def create_release(github_api, metadata: ReleaseMetadata, notes):
         target_commitish=metadata.target_branch,
         name=f"Version {metadata.release}",
         body=notes,
-        draft=True,  # Create as draft first to review
+        draft=True,
         prerelease=False,
     )
     print(f"Draft release {metadata.release} created: {release['html_url']}")
@@ -493,47 +499,39 @@ def get_tarball(ghapi_cache: GhApiCache, release: dict):
     return None
 
 
-def get_or_upload_tarball(ghapi_cache: GhApiCache, release: dict):
-    """
-    Manage the release artifact:
-    - If an artifact is already attached, download it into memory.
-    - If no artifact is attached, download the release tarball, upload it as an artifact.
+def upload_asset(
+    ghapi_cache: GhApiCache,
+    release: dict,
+    data: Union[bytes, Path],
+    name: Optional[str] = None,
+):
+    if isinstance(data, Path):
+        if name is None:
+            name = data.name
+        data = data.read_bytes()
+    assert name is not None
 
-    Args:
-        release: GitHub release object
-
-    Returns:
-        Tuple of (browser_download_url, artifact_content)
-    """
-    if found := get_tarball(ghapi_cache, release):
-        print("Found tarball in release assets")
-        return found
-
-    # No tarball found, download the release tarball
-    # and upload it as an artifact
-    print("Downloading release tarball")
-    tarball_url = release["tarball_url"]
-    tarball_content = ghapi_cache.download_file(tarball_url)
-
-    # Upload the tarball as an artifact
-    print("Uploading release tarball")
     upload_url_template = URITemplate(release["upload_url"])
-    suffix = ".tar.gz"
-    tag_name = release["tag_name"].lstrip("v")
-    name = f"{ghapi_cache.repo}-{tag_name}{suffix}"
     upload_url = upload_url_template.expand(name=name)
-    content_type = "application/gzip"
+    suffix = PurePath(name).suffix
+    suffix_map = {
+        ".gz": "gzip",
+        ".pdf": "pdf",
+    }
+    content_type = "application/" + suffix_map.get(suffix, "octet-stream")
 
     uploaded = ghapi_cache.api(
         upload_url,
         verb="post",
         headers={"Content-Type": content_type},
-        data=tarball_content,
+        data=data,
     )
-    browser_url = uploaded["browser_download_url"]
+    browser_url = uploaded.get("browser_download_url")
+    if not isinstance(browser_url, str):
+        raise ValueError("failed to upload", uploaded)
     print(f"Uploaded artifact: {browser_url}")
-    ghapi_cache.cache_file_to_url(tarball_content, browser_url, ext=suffix)
-    return Tarball(name=name, url=browser_url, content=tarball_content)
+    ghapi_cache.cache_file_to_url(data, browser_url, ext=suffix)
+    return Tarball(name=name, url=browser_url, content=data)
 
 
 def ZenodoContribBuilder(ucache: UserCache):
