@@ -3,11 +3,15 @@
 Helper functions and classes for generating release notes and managing GitHub releases.
 """
 
+import hashlib
 import io
 import json
 from datetime import datetime
 from collections import defaultdict, namedtuple
+from os import environ
 from pathlib import Path, PurePath
+import subprocess
+import tempfile
 from typing import Dict, Optional, Union
 from markdown import markdown
 from ghapi.all import gh2date
@@ -174,6 +178,14 @@ class ReleaseMetadata:
             version = version[1:]
 
         return all(x == 0 for x in version[1:])
+
+
+def create_local_tag(release_md: ReleaseMetadata):
+    """As part of the release process, create a local tag and update the given release object."""
+    release_sha = ghelp.git_rev_parse(release_md.target_branch)
+    print(f"Updating release target from {release_md.target_branch} to {release_sha}")
+    ghelp.git("tag", "-f", "v" + release_md.release, release_sha)
+    release_md.target_branch = release_sha
 
 
 class PullRequestRange:
@@ -533,6 +545,18 @@ def upload_asset(
     ghapi_cache.cache_file_to_url(data, browser_url, ext=suffix)
     return Tarball(name=name, url=browser_url, content=data)
 
+
+def prepare_spack_update(project: str, release_md: ReleaseMetadata, tgz_data: bytes):
+    sha256_hash = hashlib.sha256(tgz_data).hexdigest()
+    with ghelp.open_pbcopy() as pb:
+        pb.write(f'version("{release_md.release}", sha256="{sha256_hash}")\n')
+    print("Spack version copied to clipboard!")
+    spack = Path(environ["SPACK_ROOT"]) / "bin" / "spack"
+    package_dir = Path(
+        subprocess.check_output([spack, "location", "-p", project]).decode().strip()
+    )
+    subprocess.check_call(["open", package_dir / "package.py"])
+    return sha256_hash
 
 def ZenodoContribBuilder(ucache: UserCache):
     def make_zenodo_contributor(username, role=None):
