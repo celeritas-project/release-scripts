@@ -82,7 +82,7 @@ class GhApiCache:
 
     def issue(self, issue_id: int) -> Any:
         return self._cached_request("issue", self.api.issues.get, issue_id)
-    
+
     def pull(self, pr_id: int) -> Any:
         return self._cached_request("pull", self.api.pulls.get, pr_id)
 
@@ -120,7 +120,9 @@ class GhApiCache:
             org = self.owner
         return self._cached_request("team", self.api.teams.list, org)
 
-    def download_file(self, url: str, content_type: Optional[str] = None, ext: Optional[str] = None) -> Path:
+    def download_file(
+        self, url: str, content_type: Optional[str] = None, ext: Optional[str] = None
+    ) -> Path:
         """
         Downloads a file from the given URL and caches it by content hash in the
         ghapicache-downloads directory. Maps URL to content hash in the cache.
@@ -152,7 +154,9 @@ class GhApiCache:
         self.cache_file_to_url(r.content, url, ext)
         return r.content
 
-    def cache_file_to_url(self, content: bytes, url: str, ext: Optional[str] = None) -> bytes:
+    def cache_file_to_url(
+        self, content: bytes, url: str, ext: Optional[str] = None
+    ) -> bytes:
         if url in self.cache["files"]:
             content_hash = self.cache["files"][url]
         else:
@@ -237,4 +241,3 @@ class GhApiCache:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.flush()
-

@@ -11,8 +11,7 @@ from collections import defaultdict, namedtuple
 from os import environ
 from pathlib import Path, PurePath
 import subprocess
-import tempfile
-from typing import Dict, Optional, Union
+from typing import Iterable, Optional, Union
 from markdown import markdown
 from ghapi.all import gh2date
 from dataclasses import dataclass, field
@@ -44,34 +43,63 @@ TEAM_ROLES = {
 }
 
 
+def _load_jsonl(json_path: Path) -> list[dict]:
+    result = []
+    if not json_path.exists():
+        return result
+
+    with open(json_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            result.append(json.loads(line))
+    return result
+
+
+def _save_jsonl(arr: Iterable[dict], json_path: Path):
+    with open(json_path, "w") as f:
+        for record in arr:
+            json.dump(record, f)
+            f.write("\n")
+
+
 class UserCache:
     """Cache for user information from GitHub and local metadata."""
 
     def __init__(self, api_cache: GhApiCache, json_path: Path):
         """
-        Initialize user cache from a JSON file.
+        Initialize user cache from a JSONL file.
 
         Args:
-            json_path: Path to JSON file containing user metadata
+            json_path: Path to JSONL file containing user metadata
         """
         self.json_path = json_path
-        with open(json_path) as f:
-            user_md = json.load(f)
-        self.name_fixup = user_md.get("github_names", {})
-        self.institutes = user_md.get("institute", {})
-        self.orcid = user_md.get("orcid", {})
         self._api_cache = api_cache
-        self._cache: Dict[str, UserInfo] = {}
+        self._metadata: dict[str, dict] = {}
+
+        for user_md in _load_jsonl(json_path):
+            username = user_md.get("user")
+            if not username:
+                continue
+            self._metadata[username] = {
+                "name": user_md.get("name"),
+                "orcid": user_md.get("orcid"),
+                "institute": user_md.get("institute"),
+            }
+        self._cache: dict[str, UserInfo] = {}
 
     def _load_user_info(self, username: str) -> UserInfo:
         """Load user info from GitHub and local metadata."""
-
+        if not isinstance(username, str):
+            raise TypeError(f"user type must be a string: got {username!r}")
         u = self._api_cache.user(username)
+        user_md = self._metadata.get(username, {})
         return UserInfo(
-            name=self.name_fixup.get(username, u["name"]),
+            name=user_md.get("name") or u["name"],
             email=u["email"],
-            institute=self.institutes.get(username),
-            orcid=self.orcid.get(username),
+            institute=user_md.get("institute"),
+            orcid=user_md.get("orcid"),
             github=username,
         )
 
@@ -80,6 +108,29 @@ class UserCache:
         if username not in self._cache:
             self._cache[username] = self._load_user_info(username)
         return self._cache[username]
+
+    def _user_record(self, username: str) -> dict:
+        user_info = self._cache[username]
+        return {
+            "user": username,
+            "name": user_info.name,
+            "orcid": user_info.orcid,
+            "institute": user_info.institute,
+        }
+
+    @property
+    def users(self):
+        return self._metadata.keys()
+
+    def flush(self):
+        """Write cached user metadata to disk as JSONL, omitting private fields."""
+        _save_jsonl(
+            (
+                self._user_record(u)
+                for u in sorted(self._cache, key=lambda s: s.lower())
+            ),
+            self.json_path,
+        )
 
 
 def get_team(cached: GhApiCache, team_md: dict):
@@ -557,6 +608,7 @@ def prepare_spack_update(project: str, release_md: ReleaseMetadata, tgz_data: by
     )
     subprocess.check_call(["open", package_dir / "package.py"])
     return sha256_hash
+
 
 def ZenodoContribBuilder(ucache: UserCache):
     def make_zenodo_contributor(username, role=None):
