@@ -8,21 +8,14 @@ Helper functions for release note generation and other GitHub processing.
 
 import re
 import subprocess
-
-from pathlib import Path
 from contextlib import contextmanager
 from gzip import GzipFile
 from io import BytesIO
+from pathlib import Path
 from typing import IO
 
-
-MISSING_PR_ID = {
-    "Fix linking to CUDA toolkit when using VecGeom": 989,
-}
 GIT = "git"
 REPO = Path.home() / "Code/celeritas-temp"
-RE_SUBJECT_PR_SQUASH = re.compile(r"\(#([\d]+)\)$")
-RE_SUBJECT_PR_MERGE = re.compile(r"^Merge pull request #([\d]+)")
 
 
 def gitrun(*args):
@@ -43,17 +36,21 @@ def gitz(subcommand, *args) -> list:
     return git(subcommand, "-z", *args, split=b"\0")
 
 
-def git_log_subjects(start, stop, first_parent=True):
+def git_log_subjects(start, stop, *, first_parent=True, reverse=False) -> list[tuple[str,str]]:
     span = stop
     if start:
         span = start + ".." + stop
     args = []
     if first_parent:
         args.append("--first-parent")
-    # TODO: return (hash, subject) pairs
-    # args += [r"--format=%H\\t%s", span]
-    args += [r"--format=%s", span]
-    return git("log", *args)
+    if reverse:
+        args.append("--reverse")
+    # Use null intstead of newline, separate hash and subject with null
+    args += ["-z", r"--pretty=tformat:%H%x00%s", span]
+    items = gitrun("log", *args).stdout.split(b"\0")
+    return [
+        (sha.decode(), subj.decode()) for (sha, subj) in zip(items[::2], items[1::2])
+    ]
 
 
 def git_merge_base(a, b) -> str:
@@ -65,17 +62,6 @@ def git_rev_parse(commitish: str) -> str:
     result = git("rev-parse", commitish)[0]
     assert len(result) == 40
     return result
-
-
-def subject_to_pr(subj):
-    for expr in [RE_SUBJECT_PR_SQUASH, RE_SUBJECT_PR_MERGE]:
-        if match := expr.search(subj):
-            return int(match.group(1))
-    if subj:
-        try:
-            return MISSING_PR_ID[subj]
-        except KeyError:
-            print("Can't match log subject to PR:", subj)
 
 
 def git_renames(old_ref: str, new_ref: str):
@@ -97,8 +83,7 @@ def git_lstree(ref: str) -> list[str]:
 
 
 def git_archive_tgz(ref: str, compresslevel=9) -> bytes:
-    """Export a commit's contents to a tgz file.
-    """
+    """Export a commit's contents to a tgz file."""
     tarbytes = gitrun("archive", "--format=tar", ref).stdout
     buf = BytesIO()
     with GzipFile(fileobj=buf, mode="wb", compresslevel=compresslevel) as gzbuf:
@@ -127,11 +112,10 @@ def open_pbcopy():
         encoding="utf-8",
     )
     assert process.stdin is not None
-    
+
     try:
         writer: IO[str] = process.stdin
         yield writer
     finally:
         writer.close()
         process.wait()
-

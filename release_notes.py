@@ -6,19 +6,21 @@ Helper functions and classes for generating release notes and managing GitHub re
 import hashlib
 import io
 import json
-from datetime import datetime
+import re
+import subprocess
 from collections import defaultdict, namedtuple
+from dataclasses import dataclass, field
+from datetime import datetime
 from os import environ
 from pathlib import Path, PurePath
-import subprocess
 from typing import Iterable, Optional, Union
-from markdown import markdown
+
 from ghapi.all import gh2date
-from dataclasses import dataclass, field
+from markdown import markdown
+from uritemplate import URITemplate
+
 import githelpers as ghelp
 from ghapicache import GhApiCache
-from uritemplate import URITemplate
-import re
 
 # Define namedtuples for data structures
 UserInfo = namedtuple("UserInfo", ["name", "institute", "email", "orcid", "github"])
@@ -81,12 +83,9 @@ class UserCache:
         for user_md in _load_jsonl(json_path):
             username = user_md.get("user")
             if not username:
+                print("Missing user:", user_md)
                 continue
-            self._metadata[username] = {
-                "name": user_md.get("name"),
-                "orcid": user_md.get("orcid"),
-                "institute": user_md.get("institute"),
-            }
+            self._metadata[username] = user_md
         self._cache: dict[str, UserInfo] = {}
 
     def _load_user_info(self, username: str) -> UserInfo:
@@ -110,7 +109,10 @@ class UserCache:
         return self._cache[username]
 
     def _user_record(self, username: str) -> dict:
-        user_info = self._cache[username]
+        try:
+            user_info = self._cache[username]
+        except KeyError:
+            return self._metadata[username]
         return {
             "user": username,
             "name": user_info.name,
@@ -127,7 +129,7 @@ class UserCache:
         _save_jsonl(
             (
                 self._user_record(u)
-                for u in sorted(self._cache, key=lambda s: s.lower())
+                for u in sorted(set(self._cache) | set(self._metadata), key=lambda s: s.lower())
             ),
             self.json_path,
         )
@@ -150,13 +152,46 @@ def format_user(user_info):
     return f"{user_info.name} *({user_info.institute})*"
 
 
-def parse_log_pulls(logs):
-    """Extract PR numbers from git log output."""
-    for line in logs:
-        pr = ghelp.subject_to_pr(line)
-        if pr:
-            yield pr
+class PullRequestLogParser:
+    RE_SUBJECT_PR_SQUASH = re.compile(r"\(#([\d]+)\)$")
+    RE_SUBJECT_PR_MERGE = re.compile(r"^Merge pull request #([\d]+)")
 
+    def __init__(self, shamap: Path | None):
+        if shamap:
+            shamap_data = json.loads(shamap.read_text())
+            self.replace_sha = shamap_data["replace"]
+            self.ignore_sha = shamap_data["ignore"]
+        else:
+            self.replace_sha = {}
+            self.ignore_sha = {}
+
+    def subject_to_pr(self, subject: str) -> int:
+        for expr in [self.RE_SUBJECT_PR_SQUASH, self.RE_SUBJECT_PR_MERGE]:
+            if match := expr.search(subject):
+                return int(match.group(1))
+            
+        raise ValueError(f"Can't match log subject to PR: {subject!r}")
+            
+    def __call__(self, sha: str, subject: str):
+        """Extract PR numbers from git log output."""
+        try:
+            return self.replace_sha[sha]
+        except KeyError:
+            pass
+
+        try:
+            why = self.ignore_sha[sha]
+        except KeyError:
+            pass
+        else:
+            raise ValueError(f"Ignore {subject!r} ({sha}): {why}")
+        
+        try:
+            pr = self.subject_to_pr(subject)
+        except ValueError as e:
+            raise ValueError(f"Failed to parse {sha}: {e}") from e
+        
+        return pr
 
 def list_contributors(prev_release, new_release, author_map=None):
     """List contributors between two releases.
@@ -196,28 +231,19 @@ class ReleaseMetadata:
     merge_bases: list = field(default_factory=list)
     target_branch: str = "develop"
 
-    @classmethod
-    def from_comprehensive_version(cls, major, minor=0, patch=None):
-        "This includes all authors since the previous release split off"
-        if patch is None:
-            # Development release
-            prev = f"0.{major}.0"
-            major, minor, patch = 0, major, minor
-        else:
-            prev = f"{major}.{minor}.0"
-
-        release = f"{major}.{minor}.{patch}"
-        merge_bases = [f"v{prev}-dev^"]
-
-        return cls(
-            release=release, merge_bases=merge_bases, target_branch="v" + release
-        )
-
-    def as_version(self):
+    def as_version(self) -> tuple | None:
         """Convert release string to a version tuple."""
         if self.release is None:
             return None
-        return tuple(int(x) for x in self.release.split("."))
+
+        match = re.fullmatch(
+            r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-.*)",
+            self.release,
+        )
+        if match is None:
+            return None
+
+        return tuple(int(match.group(i + 1)) for i in range(3))
 
     def is_major(self):
         """Check if the release is a major version."""
@@ -242,30 +268,40 @@ def create_local_tag(release_md: ReleaseMetadata):
 class PullRequestRange:
     """Handle a range of pull requests for a release."""
 
-    def __init__(self, metadata: ReleaseMetadata):
+    def __init__(self, metadata: ReleaseMetadata, parser: PullRequestLogParser):
         """Initialize with release metadata."""
         self.metadata = metadata
-        self.exclude_ids = set()
-        self.pull_ids = self._compute_pull_ids()
+        self.pull_ids = self._compute_pull_ids(parser)
 
-    def _compute_pull_ids(self):
+    def _compute_pull_ids(self, parse_pr: PullRequestLogParser):
         """Compute the list of pull request IDs for this release."""
         # Compute merge bases and exclude IDs
         exclude_ids = set()
         for ref in self.metadata.merge_bases:
             mb = ghelp.git_merge_base(self.metadata.target_branch, ref)
-            exclude_ids.update(parse_log_pulls(ghelp.git_log_subjects(mb, ref)))
+            for (sha, subj) in ghelp.git_log_subjects(mb, ref):
+                try:
+                    pr_id = parse_pr(sha, subj)
+                except ValueError as e:
+                    print(e)
+                else:
+                    exclude_ids.add(pr_id)
 
         # Get pull IDs
         first_merge_base = ghelp.git_merge_base(
             self.metadata.target_branch, self.metadata.merge_bases[0]
         )
-        pull_ids = list(
-            parse_log_pulls(
-                ghelp.git_log_subjects(first_merge_base, self.metadata.target_branch)
-            )
-        )
-        return [p for p in pull_ids if p not in exclude_ids][::-1]
+
+        pull_ids = []
+        for (sha, subj) in ghelp.git_log_subjects(first_merge_base, self.metadata.target_branch, reverse=True):
+            try:
+                pr_id = parse_pr(sha, subj)
+            except ValueError as e:
+                print(e)
+            else:
+                if pr_id not in exclude_ids:
+                    pull_ids.append(pr_id)
+        return pull_ids
 
 
 class ContributionCounter:
@@ -613,6 +649,8 @@ def prepare_spack_update(project: str, release_md: ReleaseMetadata, tgz_data: by
 def ZenodoContribBuilder(ucache: UserCache):
     def make_zenodo_contributor(username, role=None):
         user_info = ucache[username]
+        if not user_info.name:
+            raise ValueError(f"Missing properties from user {username}: {user_info}")
         contributor_data = {
             "name": user_info.name,
             "affiliation": user_info.institute,

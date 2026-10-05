@@ -203,7 +203,7 @@ class GhApiCache:
         try:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.cache_file, "w") as f:
-                json.dump(self.cache, f)
+                json.dump(self.cache, f, indent=0)
         except Exception as e:
             print("Failed to save cache:", e)
         else:
