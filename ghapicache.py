@@ -61,7 +61,7 @@ class GhApiCache:
             cache_file = Path(f"data/ghapicache-{owner}-{repo}.json")
         self.cache_file = cache_file
 
-        self.api = GhApi(owner=owner, repo=repo, token=token, **kwargs)
+        self.api = GhApi(owner=owner, repo=repo, token=token, sync=True, **kwargs)
         self.owner: str = owner or ""
         self.repo: str = repo
 
