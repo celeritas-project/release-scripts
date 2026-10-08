@@ -271,7 +271,7 @@ class PullRequestRange:
     def __init__(self, metadata: ReleaseMetadata, parser: PullRequestLogParser):
         """Initialize with release metadata."""
         self.metadata = metadata
-        self.pull_ids = self._compute_pull_ids(parser)
+        self.pull_ids: list[int] = self._compute_pull_ids(parser)
 
     def _compute_pull_ids(self, parse_pr: PullRequestLogParser):
         """Compute the list of pull request IDs for this release."""
@@ -304,44 +304,35 @@ class PullRequestRange:
         return pull_ids
 
 
-class ContributionCounter:
-    """Count contributions (authoring and reviewing) from pull requests."""
+def load_contributions(cached_api, pr_id):
+    """Return the contributions represented by a single pull request."""
+    p, reviews = cached_api.pull(pr_id), cached_api.reviews(pr_id)
 
-    def __init__(self, cached_api):
-        """Initialize with a cached GitHub API instance."""
-        self.cached_api = cached_api
-        self.author_count = defaultdict(int)
-        self.reviewer_count = defaultdict(int)
+    author = p["user"]["login"]
+    pull_reviewers = {
+        r["user"]["login"] for r in reviews if r["state"] == "APPROVED"
+    }
+    pull_reviewers.discard(author)  # Remove author if they reviewed their own PR
 
-    def __call__(self, pr_id):
-        """Process a single pull request and update contribution counts."""
-        p, reviews = self.cached_api.pull(pr_id), self.cached_api.reviews(pr_id)
+    return Contributions(author=author, reviewer=sorted(pull_reviewers))
 
-        # Count author contribution
-        author = p["user"]["login"]
-        self.author_count[author] += 1
+def merge_contributions(contributions: list[Contributions]):
+    """Merge per-PR contributions and sort them by count."""
+    author_count = defaultdict(int)
+    reviewer_count = defaultdict(int)
 
-        # Count reviewers
-        pull_reviewers = {
-            r["user"]["login"] for r in reviews if r["state"] == "APPROVED"
-        }
-        pull_reviewers.discard(author)  # Remove author if they reviewed their own PR
+    for contribution in contributions:
+        author_count[contribution.author] += 1
+        for reviewer in contribution.reviewer:
+            reviewer_count[reviewer] += 1
 
-        for reviewer in pull_reviewers:
-            self.reviewer_count[reviewer] += 1
+    def sorted_count(d):
+        return dict(sorted(d.items(), key=lambda item: item[1], reverse=True))
 
-        return self
-
-    def sorted(self):
-        """Return sorted Contributions namedtuple."""
-
-        def sorted_count(d):
-            return dict(sorted(d.items(), key=lambda item: item[1], reverse=True))
-
-        return Contributions(
-            author=sorted_count(self.author_count),
-            reviewer=sorted_count(self.reviewer_count),
-        )
+    return Contributions(
+        author=sorted_count(author_count),
+        reviewer=sorted_count(reviewer_count),
+    )
 
 
 def markdown_to_rst(text):
@@ -393,13 +384,17 @@ class SortedPulls:
     def values(self):
         return self.pulls.values()
 
+BRACE_TRANSLATE = {ord(r'{'): '{{',ord(r'}'): '}}'}
+
+def escape_braces(s: str):
+    return s.translate(BRACE_TRANSLATE)
 
 class ReleaseNotes:
     """Generate release notes."""
 
     def __init__(self, release):
         """Initialize with release metadata and body text."""
-        format_fill = vars(release)
+        format_fill = dict(vars(release))
         format_fill["today"] = datetime.now()
         format_fill["merge_base"] = release.merge_bases[0]
         self.format_fill = format_fill
@@ -415,13 +410,17 @@ class ReleaseNotes:
         self.notes.extend(f"{bullet} {item}" for item in iterable)
         self.notes.append("")
 
+    def format_pr(self, pr: dict):
+        title = escape_braces(pr["title"])
+        return f"{title} *(@{pr['author']}, #{pr['id']})*"
+
     def sorted_pulls(self, pulls: SortedPulls):
         for lab, title in CATEGORIES.items():
             prs = pulls[lab]
             if not prs:
                 continue
             self.title(title)
-            self.itemize("{title} *(@{author}, #{id})*".format(**pr) for pr in prs)
+            self.itemize(self.format_pr(pr) for pr in prs)
 
     def reviewers(self, reviewers: dict, user_cache: UserCache):
         """Add a list of reviewers to the notes."""
