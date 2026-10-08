@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "celeritas-release-scripts"
+version = "0.0.0"
+description = "Scripts and notebooks for preparing Celeritas releases"
+requires-python = ">=3.10"
+dependencies = [
+    "fastcore",
+    "ghapi",
+    "Markdown",
+    "requests",
+    "uritemplate",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = []
+
+[tool.hatch.envs.default]
+# The repository consists of scripts and notebooks rather than an installable package.
+skip-install = true
+dependencies = [
+    "fastcore",
+    "ghapi",
+    "Markdown",
+    "requests",
+    "uritemplate",
+    "IPython",
+    "ipykernel",
+    "jupyter",
+    "tqdm",
+]
+
+[tool.hatch.envs.default.scripts]
+check = [
+    "python -m compileall -q ghapicache.py githelpers.py release_notes.py zenodoapi.py",
+]

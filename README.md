@@ -6,6 +6,43 @@ These unpolished scripts are used as infrastructure for
 [Celeritas](https://github.com/celeritas-project/celeritas), letting us build
 and publish releases with thorough release notes and meticulous attribution.
 
+## Environment setup
+
+The repository includes a reusable Hatch environment in `pyproject.toml`.
+Install [Hatch](https://hatch.pypa.io/) and create the environment with:
+
+```console
+python3 -m pip install hatch
+hatch env create
+```
+
+The environment includes the runtime dependencies and the notebook tooling
+used by the release notebooks (`jupyter`, `ipykernel`, `IPython`, and `tqdm`).
+To register it as a kernel for VS Code or another Jupyter client, run:
+
+```console
+hatch run python -m ipykernel install --user \
+    --name celeritas-release-scripts \
+    --display-name "Python (Celeritas release scripts)"
+```
+
+Then select **Python (Celeritas release scripts)** as the notebook kernel.
+The local modules in this repository are imported from the repository root;
+run notebooks with this directory as the working directory.
+
+The release workflow also expects:
+
+- `git`, plus a local checkout of the target project;
+- `cmake` and `ninja` when building documentation;
+- GitHub API access, using `GHAPI_TOKEN` or `~/.config/ghapi-celeritas-token`;
+- a Zenodo token in `~/.config/zenodo-token`;
+- macOS `pbcopy` for copying generated release notes to the clipboard.
+
+Run the syntax check with:
+
+```console
+hatch run check
+```
 
 ## Zenodo releases
 
