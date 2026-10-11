@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 from collections import defaultdict, namedtuple
+from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from os import environ
@@ -32,7 +33,7 @@ Contributions = namedtuple("Contributions", ["author", "reviewer"])
 CATEGORIES = {
     "enhancement": "New features",
     "bug": "Bug fixes",
-    "documentation": "Documentation improvements",
+    "documentation": "Documentation and testing",
     "minor": "Minor internal changes",
     "removal": "Deprecation and removal",
 }
@@ -129,7 +130,9 @@ class UserCache:
         _save_jsonl(
             (
                 self._user_record(u)
-                for u in sorted(set(self._cache) | set(self._metadata), key=lambda s: s.lower())
+                for u in sorted(
+                    set(self._cache) | set(self._metadata), key=lambda s: s.lower()
+                )
             ),
             self.json_path,
         )
@@ -169,9 +172,9 @@ class PullRequestLogParser:
         for expr in [self.RE_SUBJECT_PR_SQUASH, self.RE_SUBJECT_PR_MERGE]:
             if match := expr.search(subject):
                 return int(match.group(1))
-            
+
         raise ValueError(f"Can't match log subject to PR: {subject!r}")
-            
+
     def __call__(self, sha: str, subject: str):
         """Extract PR numbers from git log output."""
         try:
@@ -185,13 +188,14 @@ class PullRequestLogParser:
             pass
         else:
             raise ValueError(f"Ignore {subject!r} ({sha}): {why}")
-        
+
         try:
             pr = self.subject_to_pr(subject)
         except ValueError as e:
             raise ValueError(f"Failed to parse {sha}: {e}") from e
-        
+
         return pr
+
 
 def list_contributors(prev_release, new_release, author_map=None):
     """List contributors between two releases.
@@ -257,12 +261,14 @@ class ReleaseMetadata:
         return all(x == 0 for x in version[1:])
 
 
-def create_local_tag(release_md: ReleaseMetadata):
+def create_local_tag(release_md: ReleaseMetadata) -> ReleaseMetadata:
     """As part of the release process, create a local tag and update the given release object."""
     release_sha = ghelp.git_rev_parse(release_md.target_branch)
     print(f"Updating release target from {release_md.target_branch} to {release_sha}")
     ghelp.git("tag", "-f", "v" + release_md.release, release_sha)
-    release_md.target_branch = release_sha
+    result = copy(release_md)
+    result.target_branch = release_sha
+    return result
 
 
 class PullRequestRange:
@@ -279,7 +285,7 @@ class PullRequestRange:
         exclude_ids = set()
         for ref in self.metadata.merge_bases:
             mb = ghelp.git_merge_base(self.metadata.target_branch, ref)
-            for (sha, subj) in ghelp.git_log_subjects(mb, ref):
+            for sha, subj in ghelp.git_log_subjects(mb, ref):
                 try:
                     pr_id = parse_pr(sha, subj)
                 except ValueError as e:
@@ -293,7 +299,9 @@ class PullRequestRange:
         )
 
         pull_ids = []
-        for (sha, subj) in ghelp.git_log_subjects(first_merge_base, self.metadata.target_branch, reverse=True):
+        for sha, subj in ghelp.git_log_subjects(
+            first_merge_base, self.metadata.target_branch, reverse=True
+        ):
             try:
                 pr_id = parse_pr(sha, subj)
             except ValueError as e:
@@ -309,12 +317,11 @@ def load_contributions(cached_api, pr_id):
     p, reviews = cached_api.pull(pr_id), cached_api.reviews(pr_id)
 
     author = p["user"]["login"]
-    pull_reviewers = {
-        r["user"]["login"] for r in reviews if r["state"] == "APPROVED"
-    }
+    pull_reviewers = {r["user"]["login"] for r in reviews if r["state"] == "APPROVED"}
     pull_reviewers.discard(author)  # Remove author if they reviewed their own PR
 
     return Contributions(author=author, reviewer=sorted(pull_reviewers))
+
 
 def merge_contributions(contributions: list[Contributions]):
     """Merge per-PR contributions and sort them by count."""
@@ -384,10 +391,13 @@ class SortedPulls:
     def values(self):
         return self.pulls.values()
 
-BRACE_TRANSLATE = {ord(r'{'): '{{',ord(r'}'): '}}'}
+
+BRACE_TRANSLATE = {ord(r"{"): "{{", ord(r"}"): "}}"}
+
 
 def escape_braces(s: str):
     return s.translate(BRACE_TRANSLATE)
+
 
 class ReleaseNotes:
     """Generate release notes."""
