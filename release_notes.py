@@ -241,7 +241,7 @@ class ReleaseMetadata:
             return None
 
         match = re.fullmatch(
-            r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-.*)",
+            r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-.*)?",
             self.release,
         )
         if match is None:
@@ -700,7 +700,7 @@ class ZenodoMetadataBuilder:
 
         self.make_zcontrib = ZenodoContribBuilder(user_cache)
 
-    def __call__(self, contrib, release_md, gh_release=None):
+    def __call__(self, contrib: Contributions, release_md: ReleaseMetadata, gh_release=None):
         """
         Generate Zenodo metadata for a release.
 
@@ -741,7 +741,6 @@ class ZenodoMetadataBuilder:
                 "code:programmingLanguage": [
                     {"id": "c++", "title": {"en": "C++"}},
                     {"id": "cuda", "title": {"en": "CUDA"}},
-                    {"id": "python", "title": {"en": "Python"}},
                 ],
             },
         }
