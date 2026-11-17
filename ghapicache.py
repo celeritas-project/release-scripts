@@ -4,18 +4,17 @@
 Cache API calls from GitHub.
 """
 
-import json
 import atexit
 import hashlib
-import requests
-
+import json
+from collections.abc import Callable
 from os import environ
 from pathlib import Path
-from typing import Any, Dict, Tuple, Callable, Optional
+from typing import Any, Dict, Optional  # noqa: UP035
 
-from ghapi.all import GhApi
-
+import requests
 from fastcore.xtras import obj2dict
+from ghapi.all import GhApi
 
 
 def _load_ghapi_token():
@@ -63,7 +62,7 @@ class GhApiCache:
 
         self.api = GhApi(owner=owner, repo=repo, token=token, sync=True, **kwargs)
         self.owner: str = owner or ""
-        self.repo: str = repo
+        self.repo: str = repo or ""
 
         # Create downloads directory
         self.downloads_dir: Path = self.cache_file.parent / "ghapicache-downloads"
