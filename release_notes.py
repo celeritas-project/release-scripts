@@ -3,6 +3,7 @@
 Helper functions and classes for generating release notes and managing GitHub releases.
 """
 
+import asyncio
 import hashlib
 import io
 import json
@@ -109,6 +110,21 @@ class UserCache:
             self._cache[username] = self._load_user_info(username)
         return self._cache[username]
 
+    async def aload(self, username: str) -> UserInfo:
+        if username not in self._cache:
+            if not isinstance(username, str):
+                raise TypeError(f"user type must be a string: got {username!r}")
+            u = await self._api_cache.async_user(username)
+            user_md = self._metadata.get(username, {})
+            self._cache[username] = UserInfo(
+                name=user_md.get("name") or u["name"],
+                email=u["email"],
+                institute=user_md.get("institute"),
+                orcid=user_md.get("orcid"),
+                github=username,
+            )
+        return self._cache[username]
+
     def _user_record(self, username: str) -> dict:
         try:
             user_info = self._cache[username]
@@ -140,6 +156,13 @@ class UserCache:
 
 def get_team(cached: GhApiCache, team_md: dict):
     members = frozenset(u["login"] for u in cached.team(team_md["slug"]))
+    return Team(description=team_md["description"], members=members)
+
+
+async def async_get_team(cached: GhApiCache, team_md: dict):
+    members = frozenset(
+        u["login"] for u in await cached.async_team(team_md["slug"])
+    )
     return Team(description=team_md["description"], members=members)
 
 
@@ -313,14 +336,37 @@ class PullRequestRange:
 
 
 def load_contributions(cached_api, pr_id):
-    """Return the contributions represented by a single pull request."""
-    p, reviews = cached_api.pull(pr_id), cached_api.reviews(pr_id)
+    raise RuntimeError(
+        "load_contributions is no longer synchronous. Use "
+        "await async_load_contributions(cached_api, pr_id) or "
+        "await async_load_contributions_batch(cached_api, pull_ids). "
+        "The major API changes are an async GhApi client, shared async cache "
+        "access, and notebook calls that must use await in the existing event loop."
+    )
 
+
+async def async_load_contributions(cached_api: GhApiCache, pr_id: int):
+    p, reviews = await asyncio.gather(
+        cached_api.async_pull(pr_id), cached_api.async_reviews(pr_id)
+    )
     author = p["user"]["login"]
-    pull_reviewers = {r["user"]["login"] for r in reviews if r["state"] == "APPROVED"}
-    pull_reviewers.discard(author)  # Remove author if they reviewed their own PR
-
+    pull_reviewers = {
+        r["user"]["login"] for r in reviews if r["state"] == "APPROVED"
+    }
+    pull_reviewers.discard(author)
     return Contributions(author=author, reviewer=sorted(pull_reviewers))
+
+
+async def async_load_contributions_batch(
+    cached_api: GhApiCache, pull_ids: Iterable[int], limit: int = 8
+):
+    semaphore = asyncio.Semaphore(limit)
+
+    async def load(pr_id):
+        async with semaphore:
+            return await async_load_contributions(cached_api, pr_id)
+
+    return await asyncio.gather(*(load(pr_id) for pr_id in pull_ids))
 
 
 def merge_contributions(contributions: list[Contributions]):
@@ -353,6 +399,31 @@ class SortedPulls:
 
     def add(self, pr_id):
         p = self.cached.pull(pr_id)
+        author = p["user"]["login"]
+        labels = {lab["name"] for lab in p["labels"]}
+
+        summary = {
+            "id": pr_id,
+            "title": markdown_to_rst(p["title"]),
+            "labels": labels,
+            "author": author,
+            "merged_at": gh2date(p["merged_at"]),
+            "sha": p["merge_commit_sha"][:8],
+        }
+
+        for lab in CATEGORIES:
+            if lab in labels:
+                self.pulls[lab].append(summary)
+                return
+
+        raise ValueError(
+            "Missing label: #{} ({}): {}".format(
+                pr_id, p["title"], labels or "(no labels)"
+            )
+        )
+
+    async def async_add(self, pr_id):
+        p = await self.cached.async_pull(pr_id)
         author = p["user"]["login"]
         labels = {lab["name"] for lab in p["labels"]}
 

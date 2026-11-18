@@ -5,6 +5,7 @@ Cache API calls from GitHub.
 """
 
 import atexit
+import asyncio
 import hashlib
 import json
 from collections.abc import Callable
@@ -59,8 +60,13 @@ class GhApiCache:
         if cache_file is None:
             cache_file = Path(f"data/ghapicache-{owner}-{repo}.json")
         self.cache_file = cache_file
+        self._owner = owner
+        self._token = token
+        self._api_kwargs = kwargs
 
         self.api = GhApi(owner=owner, repo=repo, token=token, sync=True, **kwargs)
+        self._async_api = None
+        self._async_lock = None
         self.owner: str = owner or ""
         self.repo: str = repo or ""
 
@@ -87,6 +93,40 @@ class GhApiCache:
 
     def reviews(self, pr_id: int) -> Any:
         return self._cached_request("reviews", self.api.pulls.list_reviews, pr_id)
+
+    async def async_pull(self, pr_id: int) -> Any:
+        return await self._async_cached_request("pull", self.async_api.pulls.get, pr_id)
+
+    async def async_reviews(self, pr_id: int) -> Any:
+        return await self._async_cached_request(
+            "reviews", self.async_api.pulls.list_reviews, pr_id
+        )
+
+    async def async_user(self, username: str) -> Any:
+        return await self._async_cached_request(
+            "user", self.async_api.users.get_by_username, username
+        )
+
+    async def async_team(self, team: str, org: Optional[str] = None) -> Any:
+        if org is None:
+            org = self.owner
+        return await self._async_cached_request(
+            "team", self.async_api, f"/orgs/{org}/teams/{team}/members"
+        )
+
+    async def async_org_members(self, org: Optional[str] = None) -> Any:
+        if org is None:
+            org = self.owner
+        return await self._async_cached_request(
+            "org_members", self.async_api.orgs.list_members, org
+        )
+
+    async def async_teams(self, org: Optional[str] = None) -> Any:
+        if org is None:
+            org = self.owner
+        return await self._async_cached_request(
+            "team", self.async_api.teams.list, org
+        )
 
     def user(self, username: str) -> Any:
         return self._cached_request("user", self.api.users.get_by_username, username)
@@ -234,6 +274,43 @@ class GhApiCache:
             cat_cache[subkey] = response = obj2dict(func(*args, **kwargs))
             self.dirty = True
         return response
+
+    @property
+    def async_api(self) -> GhApi:
+        if self._async_api is None:
+            self._async_api = GhApi(
+                owner=self.owner,
+                repo=self.repo,
+                token=self._token,
+                sync=False,
+                **self._api_kwargs,
+            )
+        return self._async_api
+
+    def _get_async_lock(self):
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
+
+    async def _async_cached_request(
+        self, category: str, func: Callable, *args, **kwargs
+    ) -> Any:
+        subkey = self.subkey(*args, **kwargs)
+        lock = self._get_async_lock()
+        async with lock:
+            cat_cache = self.cache.setdefault(category, {})
+            try:
+                return cat_cache[subkey]
+            except KeyError:
+                pass
+
+        response = obj2dict(await func(*args, **kwargs))
+        async with lock:
+            cat_cache = self.cache.setdefault(category, {})
+            if subkey not in cat_cache:
+                cat_cache[subkey] = response
+                self.dirty = True
+            return cat_cache[subkey]
 
     def __enter__(self):
         return self
